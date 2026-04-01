@@ -1,0 +1,22 @@
+# OS / editor
+.DS_Store
+Thumbs.db
+.vs/
+*.user
+
+# Logs
+*.log
+build_errors*.txt
+
+# .NET
+**/bin/
+**/obj/
+**/tmpbuild/
+
+# Next.js / Node
+**/node_modules/
+**/.next/
+
+# Local env files
+**/.env.local
+**/.env.*.local
