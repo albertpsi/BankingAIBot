@@ -10,15 +10,20 @@ namespace BankingAIBot.API.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/[controller]")]
-public class AssistantController : ControllerBase
+public class AssistantController : ApiControllerBase
 {
     private readonly IBankingAiOrchestrator _orchestrator;
     private readonly ISavedPromptService _savedPromptService;
+    private readonly ILogger<AssistantController> _logger;
 
-    public AssistantController(IBankingAiOrchestrator orchestrator, ISavedPromptService savedPromptService)
+    public AssistantController(
+        IBankingAiOrchestrator orchestrator,
+        ISavedPromptService savedPromptService,
+        ILogger<AssistantController> logger)
     {
         _orchestrator = orchestrator;
         _savedPromptService = savedPromptService;
+        _logger = logger;
     }
 
     [HttpPost("chat")]
@@ -27,39 +32,57 @@ public class AssistantController : ControllerBase
         try
         {
             var response = await _orchestrator.RespondAsync(GetUserId(), request, cancellationToken= default);
-            if ( response is null)
+            if (response is null)
             {
                 return NotFound();
             }
+
             return Ok(response);
         }
-        catch(ArgumentException ex)
+        catch (Exception ex)
         {
-            return BadRequest();
-        }
-        catch(Exception ex)
-        {
-            return StatusCode(StatusCodes.Status500InternalServerError);
+            return HandleException<ChatResponse>(ex, _logger);
         }
     }
 
     [HttpGet("sessions")]
     public async Task<ActionResult<IReadOnlyList<ChatSessionListDto>>> ListSessions(CancellationToken cancellationToken = default)
     {
-        return Ok(await _orchestrator.ListSessionsAsync(GetUserId(), cancellationToken));
+        try
+        {
+            return Ok(await _orchestrator.ListSessionsAsync(GetUserId(), cancellationToken));
+        }
+        catch (Exception ex)
+        {
+            return HandleException<IReadOnlyList<ChatSessionListDto>>(ex, _logger);
+        }
     }
 
     [HttpGet("sessions/{sessionId:int}")]
     public async Task<ActionResult<ChatSessionDetailsDto>> GetSession([FromRoute] int sessionId, CancellationToken cancellationToken = default)
     {
-        var session = await _orchestrator.GetSessionAsync(GetUserId(), sessionId, cancellationToken);
-        return session is null ? NotFound() : Ok(session);
+        try
+        {
+            var session = await _orchestrator.GetSessionAsync(GetUserId(), sessionId, cancellationToken);
+            return session is null ? NotFound() : Ok(session);
+        }
+        catch (Exception ex)
+        {
+            return HandleException<ChatSessionDetailsDto>(ex, _logger);
+        }
     }
 
     [HttpGet("prompts")]
     public async Task<ActionResult<IReadOnlyList<SavedPromptDto>>> ListPrompts(CancellationToken cancellationToken = default)
     {
-        return Ok(await _savedPromptService.ListAsync(GetUserId(), cancellationToken));
+        try
+        {
+            return Ok(await _savedPromptService.ListAsync(GetUserId(), cancellationToken));
+        }
+        catch (Exception ex)
+        {
+            return HandleException<IReadOnlyList<SavedPromptDto>>(ex, _logger);
+        }
     }
 
     [HttpPost("prompts")]
@@ -70,9 +93,9 @@ public class AssistantController : ControllerBase
             var prompt = await _savedPromptService.SaveAsync(GetUserId(), request, cancellationToken);
             return Ok(prompt);
         }
-        catch (ArgumentException ex)
+        catch (Exception ex)
         {
-            return BadRequest(ex.Message);
+            return HandleException<SavedPromptDto>(ex, _logger);
         }
     }
 

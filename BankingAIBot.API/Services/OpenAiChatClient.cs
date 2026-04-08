@@ -17,11 +17,13 @@ public sealed class OpenAiChatClient
 
     private readonly HttpClient _httpClient;
     private readonly OpenAiOptions _options;
+    private readonly ILogger<OpenAiChatClient> _logger;
 
-    public OpenAiChatClient(HttpClient httpClient, IOptions<OpenAiOptions> options)
+    public OpenAiChatClient(HttpClient httpClient, IOptions<OpenAiOptions> options, ILogger<OpenAiChatClient> logger)
     {
         _httpClient = httpClient;
         _options = options.Value;
+        _logger = logger;
     }
 
     public async Task<OpenAiCompletionResult> CompleteAsync(
@@ -29,40 +31,48 @@ public sealed class OpenAiChatClient
         IReadOnlyList<OpenAiToolDefinition> tools,
         CancellationToken cancellationToken = default)
     {
-        if (!_options.IsConfigured)
+        try
         {
-            throw new InvalidOperationException("OpenAI is not configured.");
+            if (!_options.IsConfigured)
+            {
+                throw new InvalidOperationException("OpenAI is not configured.");
+            }
+
+            var request = new OpenAiChatCompletionRequest(
+                _options.Model,
+                messages,
+                tools.Count == 0 ? null : tools,
+                "auto",
+                _options.Temperature,
+                _options.MaxCompletionTokens);
+
+            using var httpRequest = new HttpRequestMessage(HttpMethod.Post, _options.Endpoint)
+            {
+                Content = JsonContent.Create(request, options: JsonOptions)
+            };
+            httpRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _options.ApiKey);
+
+            using var response = await _httpClient.SendAsync(httpRequest, cancellationToken);
+            var rawJson = await response.Content.ReadAsStringAsync(cancellationToken);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                throw new InvalidOperationException($"OpenAI request failed with status {(int)response.StatusCode}: {rawJson}");
+            }
+
+            var parsed = JsonSerializer.Deserialize<OpenAiChatCompletionResponse>(rawJson, JsonOptions)
+                ?? throw new InvalidOperationException("OpenAI returned an empty response.");
+
+            var choice = parsed.Choices.FirstOrDefault()
+                ?? throw new InvalidOperationException("OpenAI response did not include a choice.");
+
+            return new OpenAiCompletionResult(choice.Message, parsed.Usage, rawJson);
         }
-
-        var request = new OpenAiChatCompletionRequest(
-            _options.Model,
-            messages,
-            tools.Count == 0 ? null : tools,
-            "auto",
-            _options.Temperature,
-            _options.MaxCompletionTokens);
-
-        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, _options.Endpoint)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            Content = JsonContent.Create(request, options: JsonOptions)
-        };
-        httpRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _options.ApiKey);
-
-        using var response = await _httpClient.SendAsync(httpRequest, cancellationToken);
-        var rawJson = await response.Content.ReadAsStringAsync(cancellationToken);
-
-        if (!response.IsSuccessStatusCode)
-        {
-            throw new InvalidOperationException($"OpenAI request failed with status {(int)response.StatusCode}: {rawJson}");
+            _logger.LogError(ex, "OpenAI completion request failed.");
+            throw;
         }
-
-        var parsed = JsonSerializer.Deserialize<OpenAiChatCompletionResponse>(rawJson, JsonOptions)
-            ?? throw new InvalidOperationException("OpenAI returned an empty response.");
-
-        var choice = parsed.Choices.FirstOrDefault()
-            ?? throw new InvalidOperationException("OpenAI response did not include a choice.");
-
-        return new OpenAiCompletionResult(choice.Message, parsed.Usage, rawJson);
     }
 }
 

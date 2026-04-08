@@ -1,11 +1,12 @@
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using BankingAIBot.API.Contracts;
 using BankingAIBot.API.Data;
 using BankingAIBot.API.Models;
 using BankingAIBot.API.Options;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Options;
 
 namespace BankingAIBot.API.Services;
@@ -29,173 +30,209 @@ public sealed class BankingAiOrchestrator : IBankingAiOrchestrator
     private readonly IBankingToolExecutor _toolExecutor;
     private readonly OpenAiChatClient _openAiClient;
     private readonly OpenAiOptions _options;
+    private readonly ILogger<BankingAiOrchestrator> _logger;
 
     public BankingAiOrchestrator(
         BankingDbContext context,
         IBankingInsightsService insightsService,
         IBankingToolExecutor toolExecutor,
         OpenAiChatClient openAiClient,
-        IOptions<OpenAiOptions> options)
+        IOptions<OpenAiOptions> options,
+        ILogger<BankingAiOrchestrator> logger)
     {
         _context = context;
         _insightsService = insightsService;
         _toolExecutor = toolExecutor;
         _openAiClient = openAiClient;
         _options = options.Value;
+        _logger = logger;
     }
 
     public async Task<ChatResponse> RespondAsync(int userId, ChatRequest request, CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(request.Message))
+        IDbContextTransaction? transaction = null;
+
+        try
         {
-            throw new ArgumentException("Message cannot be empty.", nameof(request));
-        }
-
-        var startedAt = DateTime.UtcNow;
-        var session = await GetOrCreateSessionAsync(userId, request.SessionId, request.Message, cancellationToken);
-        var userMessage = new ChatMessage
-        {
-            SessionId = session.SessionId,
-            Role = "User",
-            Content = request.Message,
-            Timestamp = startedAt
-        };
-
-        _context.ChatMessages.Add(userMessage);
-        session.LastMessageAt = startedAt;
-        session.ModelName ??= _options.Model;
-
-        var snapshot = await _insightsService.BuildSnapshotAsync(userId, request.LookbackDays, cancellationToken);
-        var modelName = _options.IsConfigured ? _options.Model : "local-fallback";
-        var promptVersion = _options.PromptVersion;
-
-        string assistantMessage;
-        OpenAiUsage? usage = null;
-        string responseJson;
-
-        if (_options.IsConfigured)
-        {
-            var toolDefinitions = BuildToolDefinitions();
-            var messages = await BuildConversationAsync(session.SessionId, cancellationToken);
-            var finalMessage = await ExecuteWithToolsAsync(userId, session.SessionId, messages, toolDefinitions, cancellationToken);
-            assistantMessage = finalMessage.Message.Content?.Trim() ?? string.Empty;
-            usage = finalMessage.Usage;
-            responseJson = finalMessage.RawJson;
-        }
-        else
-        {
-            assistantMessage = BuildLocalResponse(snapshot);
-            responseJson = JsonSerializer.Serialize(new
+            if (string.IsNullOrWhiteSpace(request.Message))
             {
-                response = assistantMessage,
-                snapshot
-            }, JsonOptions);
-        }
+                throw new ArgumentException("Message cannot be empty.", nameof(request));
+            }
 
-        // Normalize currency tokens (e.g. convert "INR" to the rupee symbol) so UI displays ₹ consistently.
-        assistantMessage = NormalizeCurrencySymbols(assistantMessage);
-        responseJson = NormalizeCurrencySymbols(responseJson);
+            transaction = await _context.Database.BeginTransactionAsync(cancellationToken);
 
-        _context.ChatMessages.Add(new ChatMessage
-        {
-            SessionId = session.SessionId,
-            Role = "Assistant",
-            Content = assistantMessage,
-            Timestamp = DateTime.UtcNow,
-            ModelName = modelName,
-            PromptVersion = promptVersion,
-            PromptTokens = usage?.PromptTokens,
-            CompletionTokens = usage?.CompletionTokens,
-            TotalTokens = usage?.TotalTokens
-        });
-
-        session.LastMessageAt = DateTime.UtcNow;
-        session.ModelName = modelName;
-        if (string.IsNullOrWhiteSpace(session.TitleSummary))
-        {
-            session.TitleSummary = BuildSessionTitle(request.Message);
-        }
-
-        _context.ModelInvocationLogs.Add(new ModelInvocationLog
-        {
-            UserId = userId,
-            SessionId = session.SessionId,
-            Endpoint = _options.IsConfigured ? _options.Endpoint : "local-fallback",
-            ModelName = modelName,
-            PromptVersion = promptVersion,
-            RequestJson = JsonSerializer.Serialize(new
+            var startedAt = DateTime.UtcNow;
+            var session = await GetOrCreateSessionAsync(userId, request.SessionId, request.Message, cancellationToken);
+            var userMessage = new ChatMessage
             {
-                request.Message,
-                request.SessionId,
-                request.LookbackDays
-            }, JsonOptions),
-            ResponseJson = responseJson,
-            Succeeded = true,
-            LatencyMs = (int)Math.Max(0, (DateTime.UtcNow - startedAt).TotalMilliseconds),
-            CreatedAt = DateTime.UtcNow
-        });
+                SessionId = session.SessionId,
+                Role = "User",
+                Content = request.Message,
+                Timestamp = startedAt
+            };
 
-        await _context.SaveChangesAsync(cancellationToken);
+            _context.ChatMessages.Add(userMessage);
+            session.LastMessageAt = startedAt;
+            session.ModelName ??= _options.Model;
 
-        return new ChatResponse(
-            session.SessionId,
-            assistantMessage,
-            modelName,
-            promptVersion,
-            snapshot,
-            snapshot.SavingsSuggestions);
+            var snapshot = await _insightsService.BuildSnapshotAsync(userId, request.LookbackDays, cancellationToken);
+            var modelName = _options.IsConfigured ? _options.Model : "local-fallback";
+            var promptVersion = _options.PromptVersion;
+
+            string assistantMessage;
+            OpenAiUsage? usage = null;
+            string responseJson;
+
+            if (_options.IsConfigured)
+            {
+                var toolDefinitions = BuildToolDefinitions();
+                var messages = await BuildConversationAsync(session.SessionId, cancellationToken);
+                var finalMessage = await ExecuteWithToolsAsync(userId, session.SessionId, messages, toolDefinitions, cancellationToken);
+                assistantMessage = finalMessage.Message.Content?.Trim() ?? string.Empty;
+                usage = finalMessage.Usage;
+                responseJson = finalMessage.RawJson;
+            }
+            else
+            {
+                assistantMessage = BuildLocalResponse(snapshot);
+                responseJson = JsonSerializer.Serialize(new
+                {
+                    response = assistantMessage,
+                    snapshot
+                }, JsonOptions);
+            }
+
+            assistantMessage = NormalizeCurrencySymbols(assistantMessage);
+            responseJson = NormalizeCurrencySymbols(responseJson);
+
+            _context.ChatMessages.Add(new ChatMessage
+            {
+                SessionId = session.SessionId,
+                Role = "Assistant",
+                Content = assistantMessage,
+                Timestamp = DateTime.UtcNow,
+                ModelName = modelName,
+                PromptVersion = promptVersion,
+                PromptTokens = usage?.PromptTokens,
+                CompletionTokens = usage?.CompletionTokens,
+                TotalTokens = usage?.TotalTokens
+            });
+
+            session.LastMessageAt = DateTime.UtcNow;
+            session.ModelName = modelName;
+            if (string.IsNullOrWhiteSpace(session.TitleSummary))
+            {
+                session.TitleSummary = BuildSessionTitle(request.Message);
+            }
+
+            _context.ModelInvocationLogs.Add(new ModelInvocationLog
+            {
+                UserId = userId,
+                SessionId = session.SessionId,
+                Endpoint = _options.IsConfigured ? _options.Endpoint : "local-fallback",
+                ModelName = modelName,
+                PromptVersion = promptVersion,
+                RequestJson = JsonSerializer.Serialize(new
+                {
+                    request.Message,
+                    request.SessionId,
+                    request.LookbackDays
+                }, JsonOptions),
+                ResponseJson = responseJson,
+                Succeeded = true,
+                LatencyMs = (int)Math.Max(0, (DateTime.UtcNow - startedAt).TotalMilliseconds),
+                CreatedAt = DateTime.UtcNow
+            });
+
+            await _context.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+
+            return new ChatResponse(
+                session.SessionId,
+                assistantMessage,
+                modelName,
+                promptVersion,
+                snapshot,
+                snapshot.SavingsSuggestions);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            if (transaction is not null)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+            }
+
+            _logger.LogError(ex, "Failed to build chat response for user {UserId}.", userId);
+            throw;
+        }
     }
 
     public async Task<ChatSessionDetailsDto?> GetSessionAsync(int userId, int sessionId, CancellationToken cancellationToken = default)
     {
-        var session = await _context.ChatSessions
-            .AsNoTracking()
-            .FirstOrDefaultAsync(s => s.UserId == userId && s.SessionId == sessionId, cancellationToken);
-
-        if (session is null)
+        try
         {
-            return null;
+            var session = await _context.ChatSessions
+                .AsNoTracking()
+                .FirstOrDefaultAsync(s => s.UserId == userId && s.SessionId == sessionId, cancellationToken);
+
+            if (session is null)
+            {
+                return null;
+            }
+
+            var messages = await _context.ChatMessages
+                .AsNoTracking()
+                .Where(m => m.SessionId == session.SessionId)
+                .OrderBy(m => m.Timestamp)
+                .Select(m => new ChatMessageDto(
+                    m.MessageId,
+                    m.Role,
+                    m.Content,
+                    m.Timestamp,
+                    m.ToolName,
+                    m.ToolCallId,
+                    m.ModelName,
+                    m.PromptVersion))
+                .ToListAsync(cancellationToken);
+
+            return new ChatSessionDetailsDto(
+                session.SessionId,
+                session.TitleSummary,
+                session.StartedAt,
+                session.LastMessageAt,
+                session.Status,
+                session.ModelName,
+                messages);
         }
-
-        var messages = await _context.ChatMessages
-            .AsNoTracking()
-            .Where(m => m.SessionId == session.SessionId)
-            .OrderBy(m => m.Timestamp)
-            .Select(m => new ChatMessageDto(
-                m.MessageId,
-                m.Role,
-                m.Content,
-                m.Timestamp,
-                m.ToolName,
-                m.ToolCallId,
-                m.ModelName,
-                m.PromptVersion))
-            .ToListAsync(cancellationToken);
-
-        return new ChatSessionDetailsDto(
-            session.SessionId,
-            session.TitleSummary,
-            session.StartedAt,
-            session.LastMessageAt,
-            session.Status,
-            session.ModelName,
-            messages);
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogError(ex, "Failed to load chat session {SessionId} for user {UserId}.", sessionId, userId);
+            throw;
+        }
     }
 
     public async Task<IReadOnlyList<ChatSessionListDto>> ListSessionsAsync(int userId, CancellationToken cancellationToken = default)
     {
-        return await _context.ChatSessions
-            .AsNoTracking()
-            .Where(s => s.UserId == userId)
-            .OrderByDescending(s => s.LastMessageAt ?? s.StartedAt)
-            .Select(s => new ChatSessionListDto(
-                s.SessionId,
-                s.TitleSummary,
-                s.StartedAt,
-                s.LastMessageAt,
-                s.Status,
-                s.ModelName))
-            .ToListAsync(cancellationToken);
+        try
+        {
+            return await _context.ChatSessions
+                .AsNoTracking()
+                .Where(s => s.UserId == userId)
+                .OrderByDescending(s => s.LastMessageAt ?? s.StartedAt)
+                .Select(s => new ChatSessionListDto(
+                    s.SessionId,
+                    s.TitleSummary,
+                    s.StartedAt,
+                    s.LastMessageAt,
+                    s.Status,
+                    s.ModelName))
+                .ToListAsync(cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogError(ex, "Failed to list chat sessions for user {UserId}.", userId);
+            throw;
+        }
     }
 
     private async Task<ChatSession> GetOrCreateSessionAsync(int userId, int? sessionId, string titleSeed, CancellationToken cancellationToken)
@@ -384,36 +421,36 @@ public sealed class BankingAiOrchestrator : IBankingAiOrchestrator
             new OpenAiToolDefinition(
                 "function",
                 new OpenAiFunctionDefinition(
-                        "get_transactions_for_date",
-                        "Fetch transactions for a specific calendar date or explicit date range.",
-                        JsonNode.Parse("""
-                        {
-                            "type": "object",
-                            "properties": {
-                                "type": {
-                                    "type": "string",
-                                    "enum": ["credit", "debit", "all"],
-                                    "description": "Filter transactions by type."
-                                },
-                                "date": {
-                                    "type": "string",
-                                    "format": "date",
-                                    "description": "A single calendar date (YYYY-MM-DD) to query (inclusive)."
-                                },
-                                "from": {
-                                    "type": "string",
-                                    "format": "date",
-                                    "description": "Inclusive start date (YYYY-MM-DD)."
-                                },
-                                "to": {
-                                    "type": "string",
-                                    "format": "date",
-                                    "description": "Inclusive end date (YYYY-MM-DD)."
-                                }
+                    "get_transactions_for_date",
+                    "Fetch transactions for a specific calendar date or explicit date range.",
+                    JsonNode.Parse("""
+                    {
+                        "type": "object",
+                        "properties": {
+                            "type": {
+                                "type": "string",
+                                "enum": ["credit", "debit", "all"],
+                                "description": "Filter transactions by type."
                             },
-                            "additionalProperties": false
-                        }
-                        """)!)),
+                            "date": {
+                                "type": "string",
+                                "format": "date",
+                                "description": "A single calendar date (YYYY-MM-DD) to query (inclusive)."
+                            },
+                            "from": {
+                                "type": "string",
+                                "format": "date",
+                                "description": "Inclusive start date (YYYY-MM-DD)."
+                            },
+                            "to": {
+                                "type": "string",
+                                "format": "date",
+                                "description": "Inclusive end date (YYYY-MM-DD)."
+                            }
+                        },
+                        "additionalProperties": false
+                    }
+                    """)!)),
             new OpenAiToolDefinition(
                 "function",
                 new OpenAiFunctionDefinition(
@@ -495,7 +532,6 @@ public sealed class BankingAiOrchestrator : IBankingAiOrchestrator
     private static string NormalizeCurrencySymbols(string? input)
     {
         if (string.IsNullOrEmpty(input)) return input ?? string.Empty;
-        // Replace standalone INR tokens with the rupee symbol. Preserve spacing/punctuation.
         return Regex.Replace(input, "\\bINR\\b", "₹");
     }
 

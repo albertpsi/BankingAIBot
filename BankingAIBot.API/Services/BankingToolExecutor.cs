@@ -17,15 +17,22 @@ public sealed class BankingToolExecutor : IBankingToolExecutor
 
     private readonly IBankingToolDataService _toolDataService;
     private readonly IBankingInsightsService _insightsService;
+    private readonly ILogger<BankingToolExecutor> _logger;
 
-    public BankingToolExecutor(IBankingToolDataService toolDataService, IBankingInsightsService insightsService)
+    public BankingToolExecutor(
+        IBankingToolDataService toolDataService,
+        IBankingInsightsService insightsService,
+        ILogger<BankingToolExecutor> logger)
     {
         _toolDataService = toolDataService;
         _insightsService = insightsService;
+        _logger = logger;
     }
 
     public async Task<string> ExecuteAsync(int userId, string toolName, string argumentsJson, CancellationToken cancellationToken = default)
     {
+        try
+        {
         var normalizedName = toolName.Trim().ToLowerInvariant();
         var args = ParseArguments(argumentsJson);
 
@@ -83,6 +90,12 @@ public sealed class BankingToolExecutor : IBankingToolExecutor
                 },
                 JsonOptions)
         };
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogError(ex, "Failed to execute tool {ToolName} for user {UserId}.", toolName, userId);
+            throw;
+        }
     }
 
     private static Dictionary<string, JsonElement> ParseArguments(string argumentsJson)

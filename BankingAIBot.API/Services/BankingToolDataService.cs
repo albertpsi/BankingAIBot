@@ -15,14 +15,18 @@ public interface IBankingToolDataService
 public sealed class BankingToolDataService : IBankingToolDataService
 {
     private readonly IDbContextFactory<BankingDbContext> _contextFactory;
+    private readonly ILogger<BankingToolDataService> _logger;
 
-    public BankingToolDataService(IDbContextFactory<BankingDbContext> contextFactory)
+    public BankingToolDataService(IDbContextFactory<BankingDbContext> contextFactory, ILogger<BankingToolDataService> logger)
     {
         _contextFactory = contextFactory;
+        _logger = logger;
     }
 
     public async Task<AccountInfoToolResultDto> GetAccountInfoAsync(int userId, CancellationToken cancellationToken = default)
     {
+        try
+        {
         await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
         var accounts = await LoadAccountsAsync(context, userId, cancellationToken);
 
@@ -30,10 +34,18 @@ public sealed class BankingToolDataService : IBankingToolDataService
             accounts.Sum(a => a.Balance),
             accounts.Sum(a => a.AvailableBalance),
             accounts);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogError(ex, "Failed to load tool account info for user {UserId}.", userId);
+            throw;
+        }
     }
 
     public async Task<TransactionsToolResultDto> GetTransactionsAsync(int userId, string type, int lookbackDays, CancellationToken cancellationToken = default)
     {
+        try
+        {
         await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
         var normalizedType = NormalizeTransactionType(type);
         var normalizedDays = NormalizeLookbackDays(lookbackDays, 90);
@@ -45,10 +57,18 @@ public sealed class BankingToolDataService : IBankingToolDataService
             normalizedDays,
             transactions.Count,
             transactions);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogError(ex, "Failed to load tool transactions for user {UserId}.", userId);
+            throw;
+        }
     }
 
     public async Task<TransactionsAndAccountInfoToolResultDto> GetTransactionsAndAccountInfoAsync(int userId, string type, int lookbackDays, CancellationToken cancellationToken = default)
     {
+        try
+        {
         var accountTask = GetAccountInfoAsync(userId, cancellationToken);
         var transactionTask = GetTransactionsAsync(userId, type, lookbackDays, cancellationToken);
 
@@ -65,10 +85,18 @@ public sealed class BankingToolDataService : IBankingToolDataService
             transactionInfo.TransactionCount,
             accountInfo.Accounts,
             transactionInfo.Transactions);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogError(ex, "Failed to load combined tool data for user {UserId}.", userId);
+            throw;
+        }
     }
 
     public async Task<TransactionsToolResultDto> GetTransactionsForDateAsync(int userId, string type, DateTime? dateUtc, DateTime? fromUtc, DateTime? toUtc, CancellationToken cancellationToken = default)
     {
+        try
+        {
         await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
 
         // Determine range. If `dateUtc` provided, treat as that calendar day (00:00 UTC inclusive to next day exclusive).
@@ -103,6 +131,12 @@ public sealed class BankingToolDataService : IBankingToolDataService
             days,
             transactions.Count,
             transactions);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogError(ex, "Failed to load tool transactions by date for user {UserId}.", userId);
+            throw;
+        }
     }
 
     private static async Task<IReadOnlyList<TransactionDto>> LoadTransactionsRangeAsync(

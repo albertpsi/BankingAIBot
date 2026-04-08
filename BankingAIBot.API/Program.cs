@@ -57,6 +57,7 @@ builder.Services.AddScoped<IBankingToolDataService, BankingToolDataService>();
 builder.Services.AddScoped<IBankingToolExecutor, BankingToolExecutor>();
 builder.Services.AddScoped<IBankingAiOrchestrator, BankingAiOrchestrator>();
 builder.Services.AddScoped<ISavedPromptService, SavedPromptService>();
+builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<IJwtTokenService, JwtTokenService>();
 builder.Services.AddSingleton<IConfigureOptions<JwtBearerOptions>, JwtBearerOptionsSetup>();
 

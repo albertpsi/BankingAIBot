@@ -17,14 +17,18 @@ public interface IBankingInsightsService
 public sealed class BankingInsightsService : IBankingInsightsService
 {
     private readonly BankingDbContext _context;
+    private readonly ILogger<BankingInsightsService> _logger;
 
-    public BankingInsightsService(BankingDbContext context)
+    public BankingInsightsService(BankingDbContext context, ILogger<BankingInsightsService> logger)
     {
         _context = context;
+        _logger = logger;
     }
 
     public async Task<BankingSnapshotDto> BuildSnapshotAsync(int userId, int lookbackDays, CancellationToken cancellationToken = default)
     {
+        try
+        {
         lookbackDays = Math.Max(7, lookbackDays);
 
         var now = DateTime.UtcNow;
@@ -75,13 +79,31 @@ public sealed class BankingInsightsService : IBankingInsightsService
             recentTransactions,
             categorySpend,
             persistedSuggestions);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogError(ex, "Failed to build banking snapshot for user {UserId}.", userId);
+            throw;
+        }
     }
 
-    public Task<IReadOnlyList<AccountDto>> GetAccountsAsync(int userId, CancellationToken cancellationToken = default)
-        => LoadAccountDtosAsync(userId, cancellationToken);
+    public async Task<IReadOnlyList<AccountDto>> GetAccountsAsync(int userId, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            return await LoadAccountDtosAsync(userId, cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogError(ex, "Failed to load accounts for user {UserId}.", userId);
+            throw;
+        }
+    }
 
     public async Task<IReadOnlyList<TransactionDto>> GetRecentTransactionsAsync(int userId, int lookbackDays, CancellationToken cancellationToken = default)
     {
+        try
+        {
         lookbackDays = Math.Max(7, lookbackDays);
         var accountIds = await GetUserAccountIdsAsync(userId, cancellationToken);
         if (accountIds.Length == 0)
@@ -92,10 +114,18 @@ public sealed class BankingInsightsService : IBankingInsightsService
         var recentCutoff = DateTime.UtcNow.AddDays(-lookbackDays);
         var transactions = await LoadRecentTransactionsAsync(accountIds, recentCutoff, cancellationToken);
         return transactions;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogError(ex, "Failed to load recent transactions for user {UserId}.", userId);
+            throw;
+        }
     }
 
     public async Task<IReadOnlyList<CategorySpendDto>> GetMonthlyCategorySpendAsync(int userId, int year, int month, CancellationToken cancellationToken = default)
     {
+        try
+        {
         var accountIds = await GetUserAccountIdsAsync(userId, cancellationToken);
         if (accountIds.Length == 0)
         {
@@ -106,10 +136,18 @@ public sealed class BankingInsightsService : IBankingInsightsService
         var end = start.AddMonths(1);
         var transactions = await LoadRecentTransactionsAsync(accountIds, start, cancellationToken, end);
         return BuildCategorySpend(transactions);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogError(ex, "Failed to load monthly category spend for user {UserId}.", userId);
+            throw;
+        }
     }
 
     public async Task<IReadOnlyList<SavingsSuggestionDto>> GetSavingsSuggestionsAsync(int userId, CancellationToken cancellationToken = default)
     {
+        try
+        {
         var suggestions = await _context.SavingsSuggestions
             .AsNoTracking()
             .Where(s => s.UserId == userId)
@@ -125,6 +163,12 @@ public sealed class BankingInsightsService : IBankingInsightsService
             .ToListAsync(cancellationToken);
 
         return suggestions;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogError(ex, "Failed to load savings suggestions for user {UserId}.", userId);
+            throw;
+        }
     }
 
     private async Task<IReadOnlyList<AccountDto>> LoadAccountDtosAsync(int userId, CancellationToken cancellationToken)
@@ -288,8 +332,10 @@ public sealed class BankingInsightsService : IBankingInsightsService
     {
         var monthStart = new DateTime(now.Year, now.Month, 1, 0, 0, 0, DateTimeKind.Utc);
         var nextMonthStart = monthStart.AddMonths(1);
-
-        await using var transaction = await _context.Database.BeginTransactionAsync(cancellationToken);
+        var ownsTransaction = _context.Database.CurrentTransaction is null;
+        var transaction = ownsTransaction
+            ? await _context.Database.BeginTransactionAsync(cancellationToken)
+            : _context.Database.CurrentTransaction;
 
         try
         {
@@ -330,11 +376,26 @@ public sealed class BankingInsightsService : IBankingInsightsService
             }
 
             await _context.SaveChangesAsync(cancellationToken);
-            await transaction.CommitAsync(cancellationToken);
+            if (ownsTransaction && transaction is not null)
+            {
+                await transaction.CommitAsync(cancellationToken);
+            }
         }
-        catch (DbUpdateConcurrencyException)
+        catch (DbUpdateConcurrencyException ex)
         {
-            await transaction.RollbackAsync(cancellationToken);
+            if (ownsTransaction && transaction is not null)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+            }
+
+            _logger.LogWarning(ex, "Concurrency issue while persisting derived banking data for user {UserId}.", userId);
+        }
+        finally
+        {
+            if (ownsTransaction && transaction is not null)
+            {
+                await transaction.DisposeAsync();
+            }
         }
     }
 }

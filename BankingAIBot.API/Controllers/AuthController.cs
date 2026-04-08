@@ -9,15 +9,23 @@ namespace BankingAIBot.API.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
-public class AuthController : ControllerBase
+public class AuthController : ApiControllerBase
 {
     private readonly BankingDbContext _context;
     private readonly IJwtTokenService _tokenService;
+    private readonly IAuthService _authService;
+    private readonly ILogger<AuthController> _logger;
 
-    public AuthController(BankingDbContext context, IJwtTokenService tokenService)
+    public AuthController(
+        BankingDbContext context,
+        IJwtTokenService tokenService,
+        IAuthService authService,
+        ILogger<AuthController> logger)
     {
         _context = context;
         _tokenService = tokenService;
+        _authService = authService;
+        _logger = logger;
     }
 
     public record LoginRequest(string Email, string Password);
@@ -26,100 +34,52 @@ public class AuthController : ControllerBase
     [HttpPost("login")]
     public async Task<IActionResult> Login([FromBody] LoginRequest request)
     {
-        var email = request.Email.Trim().ToLowerInvariant();
-        var user = await _context.Users.FirstOrDefaultAsync(u => u.Email == email);
-
-        if (user == null)
+        try
         {
-            return Unauthorized("Invalid credentials.");
-        }
+            var email = request.Email.Trim().ToLowerInvariant();
+            var user = await _context.Users.FirstOrDefaultAsync(u => u.Email == email);
 
-        if (!VerifyPassword(user, request.Password))
+            if (user == null)
+            {
+                return Unauthorized("Invalid credentials.");
+            }
+
+            if (!VerifyPassword(user, request.Password))
+            {
+                return Unauthorized("Invalid credentials.");
+            }
+
+            return Ok(BuildAuthPayload(user));
+        }
+        catch (Exception ex)
         {
-            return Unauthorized("Invalid credentials.");
+            return HandleException(ex, _logger);
         }
-
-        return Ok(BuildAuthPayload(user));
     }
 
     [HttpPost("register")]
     public async Task<IActionResult> Register([FromBody] RegisterRequest request)
     {
-        var email = request.Email.Trim().ToLowerInvariant();
-        if (string.IsNullOrWhiteSpace(request.Name) || string.IsNullOrWhiteSpace(email) || string.IsNullOrWhiteSpace(request.Password))
+        try
         {
-            return BadRequest("Name, email, and password are required.");
+            if (!string.Equals(request.Password, request.ConfirmPassword, StringComparison.Ordinal))
+            {
+                return BadRequest("Passwords do not match.");
+            }
+
+            var user = await _authService.RegisterAsync(request.Name, request.Email, request.Password);
+
+            return Ok(BuildAuthPayload(user));
         }
-
-        if (!string.Equals(request.Password, request.ConfirmPassword, StringComparison.Ordinal))
+        catch (InvalidOperationException ex)
         {
-            return BadRequest("Passwords do not match.");
+            _logger.LogWarning(ex, "Registration conflict for email {Email}.", request.Email);
+            return Conflict(ex.Message);
         }
-
-        var existing = await _context.Users.AnyAsync(u => u.Email == email);
-        if (existing)
+        catch (Exception ex)
         {
-            return Conflict("An account with that email already exists.");
+            return HandleException(ex, _logger);
         }
-
-        var user = new User
-        {
-            Name = request.Name.Trim(),
-            Email = email,
-            Role = "Customer",
-            ConsentToAiProcessing = true,
-            ConsentToAnalytics = true
-        };
-
-        var passwordHasher = new PasswordHasher<User>();
-        user.PasswordHash = passwordHasher.HashPassword(user, request.Password);
-
-        _context.Users.Add(user);
-        await _context.SaveChangesAsync();
-
-        _context.ConsentRecords.AddRange(
-            new ConsentRecord
-            {
-                UserId = user.UserId,
-                ConsentType = "AI Processing",
-                Granted = true,
-                Source = "Registration"
-            },
-            new ConsentRecord
-            {
-                UserId = user.UserId,
-                ConsentType = "Analytics",
-                Granted = true,
-                Source = "Registration"
-            });
-
-        _context.Accounts.AddRange(
-            new Account
-            {
-                UserId = user.UserId,
-                AccountType = "Current",
-                DisplayName = "Current",
-                ExternalAccountId = $"acct_{user.UserId}_current",
-                AccountStatus = "Active",
-                Balance = 0m,
-                AvailableBalance = 0m,
-                Currency = "INR"
-            },
-            new Account
-            {
-                UserId = user.UserId,
-                AccountType = "Savings",
-                DisplayName = "Savings",
-                ExternalAccountId = $"acct_{user.UserId}_savings",
-                AccountStatus = "Active",
-                Balance = 0m,
-                AvailableBalance = 0m,
-                Currency = "INR"
-            });
-
-        await _context.SaveChangesAsync();
-
-        return Ok(BuildAuthPayload(user));
     }
 
     private bool VerifyPassword(User user, string password)
