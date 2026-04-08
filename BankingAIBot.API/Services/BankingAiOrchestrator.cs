@@ -28,6 +28,7 @@ public sealed class BankingAiOrchestrator : IBankingAiOrchestrator
     private readonly BankingDbContext _context;
     private readonly IBankingInsightsService _insightsService;
     private readonly IBankingToolExecutor _toolExecutor;
+    private readonly IChatQueryValidationService _queryValidationService;
     private readonly OpenAiChatClient _openAiClient;
     private readonly OpenAiOptions _options;
     private readonly ILogger<BankingAiOrchestrator> _logger;
@@ -36,6 +37,7 @@ public sealed class BankingAiOrchestrator : IBankingAiOrchestrator
         BankingDbContext context,
         IBankingInsightsService insightsService,
         IBankingToolExecutor toolExecutor,
+        IChatQueryValidationService queryValidationService,
         OpenAiChatClient openAiClient,
         IOptions<OpenAiOptions> options,
         ILogger<BankingAiOrchestrator> logger)
@@ -43,6 +45,7 @@ public sealed class BankingAiOrchestrator : IBankingAiOrchestrator
         _context = context;
         _insightsService = insightsService;
         _toolExecutor = toolExecutor;
+        _queryValidationService = queryValidationService;
         _openAiClient = openAiClient;
         _options = options.Value;
         _logger = logger;
@@ -54,10 +57,7 @@ public sealed class BankingAiOrchestrator : IBankingAiOrchestrator
 
         try
         {
-            if (string.IsNullOrWhiteSpace(request.Message))
-            {
-                throw new ArgumentException("Message cannot be empty.", nameof(request));
-            }
+            await _queryValidationService.ValidateAsync(request.Message, cancellationToken);
 
             transaction = await _context.Database.BeginTransactionAsync(cancellationToken);
 

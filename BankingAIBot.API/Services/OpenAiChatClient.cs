@@ -30,6 +30,14 @@ public sealed class OpenAiChatClient
         IReadOnlyList<OpenAiMessage> messages,
         IReadOnlyList<OpenAiToolDefinition> tools,
         CancellationToken cancellationToken = default)
+        => await CompleteAsync(messages, tools, null, null, cancellationToken);
+
+    public async Task<OpenAiCompletionResult> CompleteAsync(
+        IReadOnlyList<OpenAiMessage> messages,
+        IReadOnlyList<OpenAiToolDefinition> tools,
+        double? temperature,
+        int? maxCompletionTokens,
+        CancellationToken cancellationToken = default)
     {
         try
         {
@@ -43,8 +51,8 @@ public sealed class OpenAiChatClient
                 messages,
                 tools.Count == 0 ? null : tools,
                 "auto",
-                _options.Temperature,
-                _options.MaxCompletionTokens);
+                temperature ?? _options.Temperature,
+                maxCompletionTokens ?? _options.MaxCompletionTokens);
 
             using var httpRequest = new HttpRequestMessage(HttpMethod.Post, _options.Endpoint)
             {

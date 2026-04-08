@@ -8,6 +8,7 @@ public sealed class OpenAiOptions
     public double Temperature { get; set; } = 0.2;
     public int MaxCompletionTokens { get; set; } = 800;
     public string PromptVersion { get; set; } = "poc-v1";
+    public bool EnableIntentValidation { get; set; } = false;
 
     public bool IsConfigured => !string.IsNullOrWhiteSpace(ApiKey);
 }

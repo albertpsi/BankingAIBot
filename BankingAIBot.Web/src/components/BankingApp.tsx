@@ -70,6 +70,7 @@ function renderFormattedText(text: string) {
   const lines = text.split(/\r?\n/);
   const blocks: ReactNode[] = [];
   let listItems: Array<{ title: string; details: string[]; key: number }> = [];
+  let currentListItem: { title: string; details: string[]; key: number } | null = null;
 
   const flushList = (key: number) => {
     if (!listItems.length) return;
@@ -110,23 +111,20 @@ function renderFormattedText(text: string) {
       </ol>,
     );
     listItems = [];
+    currentListItem = null;
   };
 
   lines.forEach((line, index) => {
     const trimmed = line.trim();
     const listMatch = trimmed.match(/^\d+\.\s+(.*)$/);
     if (listMatch) {
-      listItems.push({ title: listMatch[1], details: [], key: index });
+      currentListItem = { title: listMatch[1], details: [], key: index };
+      listItems.push(currentListItem);
       return;
     }
 
-    const isListDetail =
-      trimmed.length === 0 ||
-      trimmed.startsWith("-") ||
-      trimmed.startsWith("•");
-
-    if (listItems.length && isListDetail) {
-      listItems[listItems.length - 1].details.push(line);
+    if (currentListItem) {
+      currentListItem.details.push(line);
       return;
     }
 
