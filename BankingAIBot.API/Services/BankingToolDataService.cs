@@ -9,6 +9,7 @@ public interface IBankingToolDataService
     Task<AccountInfoToolResultDto> GetAccountInfoAsync(int userId, CancellationToken cancellationToken = default);
     Task<TransactionsToolResultDto> GetTransactionsAsync(int userId, string type, int lookbackDays, CancellationToken cancellationToken = default);
     Task<TransactionsAndAccountInfoToolResultDto> GetTransactionsAndAccountInfoAsync(int userId, string type, int lookbackDays, CancellationToken cancellationToken = default);
+    Task<TransactionsToolResultDto> GetTransactionsForDateAsync(int userId, string type, DateTime? dateUtc, DateTime? fromUtc, DateTime? toUtc, CancellationToken cancellationToken = default);
 }
 
 public sealed class BankingToolDataService : IBankingToolDataService
@@ -64,6 +65,85 @@ public sealed class BankingToolDataService : IBankingToolDataService
             transactionInfo.TransactionCount,
             accountInfo.Accounts,
             transactionInfo.Transactions);
+    }
+
+    public async Task<TransactionsToolResultDto> GetTransactionsForDateAsync(int userId, string type, DateTime? dateUtc, DateTime? fromUtc, DateTime? toUtc, CancellationToken cancellationToken = default)
+    {
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+
+        // Determine range. If `dateUtc` provided, treat as that calendar day (00:00 UTC inclusive to next day exclusive).
+        DateTime startUtc;
+        DateTime endUtc;
+
+        if (dateUtc.HasValue)
+        {
+            startUtc = DateTime.SpecifyKind(dateUtc.Value.Date, DateTimeKind.Utc);
+            endUtc = startUtc.AddDays(1);
+        }
+        else if (fromUtc.HasValue || toUtc.HasValue)
+        {
+            startUtc = fromUtc?.Date ?? DateTime.SpecifyKind(DateTime.UtcNow.Date, DateTimeKind.Utc);
+            // If `toUtc` provided, include that day by using next-day exclusive bound
+            endUtc = (toUtc?.Date ?? startUtc).AddDays(1);
+        }
+        else
+        {
+            // No dates provided — fall back to last 1 day
+            startUtc = DateTime.UtcNow.Date;
+            endUtc = startUtc.AddDays(1);
+        }
+
+        var normalizedType = NormalizeTransactionType(type);
+        var transactions = await LoadTransactionsRangeAsync(context, userId, normalizedType, startUtc, endUtc, cancellationToken);
+
+        var days = Math.Max(1, (int)Math.Ceiling((endUtc - startUtc).TotalDays));
+
+        return new TransactionsToolResultDto(
+            normalizedType,
+            days,
+            transactions.Count,
+            transactions);
+    }
+
+    private static async Task<IReadOnlyList<TransactionDto>> LoadTransactionsRangeAsync(
+        BankingDbContext context,
+        int userId,
+        string normalizedType,
+        DateTime fromUtc,
+        DateTime toUtc,
+        CancellationToken cancellationToken)
+    {
+        var query = context.Transactions
+            .AsNoTracking()
+            .Where(t => t.Account.UserId == userId && t.Account.IsActive && t.Timestamp >= fromUtc && t.Timestamp < toUtc);
+
+        var storedType = normalizedType switch
+        {
+            "credit" => "Credit",
+            "debit" => "Debit",
+            _ => null
+        };
+
+        if (storedType is not null)
+        {
+            query = query.Where(t => t.TransactionType == storedType);
+        }
+
+        return await query
+            .OrderByDescending(t => t.Timestamp)
+            .Select(t => new TransactionDto(
+                t.TransactionId,
+                t.AccountId,
+                t.Account.DisplayName,
+                t.Amount,
+                t.TransactionType,
+                t.Category,
+                t.Description,
+                t.Timestamp,
+                t.MerchantName,
+                t.IsPending,
+                t.BalanceAfter))
+            .ToListAsync(cancellationToken);
     }
 
     private static async Task<IReadOnlyList<AccountDto>> LoadAccountsAsync(BankingDbContext context, int userId, CancellationToken cancellationToken)

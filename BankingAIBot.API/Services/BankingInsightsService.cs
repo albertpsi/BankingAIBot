@@ -56,6 +56,10 @@ public sealed class BankingInsightsService : IBankingInsightsService
 
         await PersistDerivedDataAsync(userId, now, categorySpend, suggestions, cancellationToken);
 
+        // After persisting generated suggestions, reload the persisted suggestions
+        // so that returned DTOs include database-assigned IDs (not 0).
+        var persistedSuggestions = (await GetSavingsSuggestionsAsync(userId, cancellationToken)).ToList();
+
         var monthlyIncome = monthlyTransactions.Where(t => t.Amount > 0).Sum(t => t.Amount);
         var monthlySpend = monthlyTransactions.Where(t => t.Amount < 0).Sum(t => Math.Abs(t.Amount));
         var totalBalance = accounts.Sum(a => a.Balance);
@@ -70,7 +74,7 @@ public sealed class BankingInsightsService : IBankingInsightsService
             accounts,
             recentTransactions,
             categorySpend,
-            suggestions);
+            persistedSuggestions);
     }
 
     public Task<IReadOnlyList<AccountDto>> GetAccountsAsync(int userId, CancellationToken cancellationToken = default)

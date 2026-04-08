@@ -864,9 +864,9 @@ export default function BankingApp() {
                         No savings suggestions right now.
                       </p>
                     ) : (
-                      snapshot.savingsSuggestions.map((item) => (
+                      snapshot.savingsSuggestions.map((item, index) => (
                         <div
-                          key={item.savingsSuggestionId}
+                          key={`${item.savingsSuggestionId}-${index}`}
                           className="suggestion-card"
                         >
                           <strong>{item.title}</strong>

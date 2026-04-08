@@ -41,6 +41,16 @@ public sealed class BankingToolExecutor : IBankingToolExecutor
                     GetLookbackDays(args, 90),
                     cancellationToken),
                 JsonOptions),
+            "get_transactions_for_date" => JsonSerializer.Serialize(
+                await _toolDataService.GetTransactionsForDateAsync(
+                    userId,
+                    GetString(args, "type", "all"),
+                    // If `date` provided, treat as full-day inclusive; if `from`/`to` provided, parse and use inclusive range.
+                    ParseDateOrDefault(args.TryGetValue("date", out var d) ? d : default, null),
+                    ParseDateOrDefault(args.TryGetValue("from", out var f) ? f : default, null),
+                    ParseDateOrDefault(args.TryGetValue("to", out var t) ? t : default, null),
+                    cancellationToken),
+                JsonOptions),
             "get_transactions_and_account_info" => JsonSerializer.Serialize(
                 await _toolDataService.GetTransactionsAndAccountInfoAsync(
                     userId,
@@ -118,5 +128,38 @@ public sealed class BankingToolExecutor : IBankingToolExecutor
             JsonValueKind.String when int.TryParse(value.GetString(), out var parsed) => parsed,
             _ => fallback
         };
+    }
+
+    private static DateTime? ParseDateOrDefault(JsonElement? element, DateTime? fallback)
+    {
+        if (element is null || element.Value.ValueKind == JsonValueKind.Null)
+        {
+            return fallback;
+        }
+
+        try
+        {
+            if (element.Value.ValueKind == JsonValueKind.String)
+            {
+                var s = element.Value.GetString();
+                if (string.IsNullOrWhiteSpace(s)) return fallback;
+                // Try parse date-only (yyyy-MM-dd) first, then full date-time. Treat parsed date as UTC date at 00:00.
+                if (DateTime.TryParseExact(s, "yyyy-MM-dd", null, System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal, out var d))
+                {
+                    return DateTime.SpecifyKind(d.Date, DateTimeKind.Utc);
+                }
+
+                if (DateTime.TryParse(s, null, System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal, out var parsed))
+                {
+                    return DateTime.SpecifyKind(parsed.ToUniversalTime(), DateTimeKind.Utc);
+                }
+            }
+        }
+        catch
+        {
+            // ignore and return fallback
+        }
+
+        return fallback;
     }
 }

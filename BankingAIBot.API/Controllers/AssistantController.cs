@@ -2,6 +2,7 @@ using System.Security.Claims;
 using BankingAIBot.API.Contracts;
 using BankingAIBot.API.Services;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Mvc;
 
 namespace BankingAIBot.API.Controllers;
@@ -23,8 +24,23 @@ public class AssistantController : ControllerBase
     [HttpPost("chat")]
     public async Task<ActionResult<ChatResponse>> Chat([FromBody] ChatRequest request, CancellationToken cancellationToken = default)
     {
-        var response = await _orchestrator.RespondAsync(GetUserId(), request, cancellationToken);
-        return Ok(response);
+        try
+        {
+            var response = await _orchestrator.RespondAsync(GetUserId(), request, cancellationToken= default);
+            if ( response is null)
+            {
+                return NotFound();
+            }
+            return Ok(response);
+        }
+        catch(ArgumentException ex)
+        {
+            return BadRequest();
+        }
+        catch(Exception ex)
+        {
+            return StatusCode(StatusCodes.Status500InternalServerError);
+        }
     }
 
     [HttpGet("sessions")]

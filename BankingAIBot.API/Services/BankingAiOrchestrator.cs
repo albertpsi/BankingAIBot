@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Text.Json.Nodes;
 using BankingAIBot.API.Contracts;
 using BankingAIBot.API.Data;
@@ -90,6 +91,10 @@ public sealed class BankingAiOrchestrator : IBankingAiOrchestrator
                 snapshot
             }, JsonOptions);
         }
+
+        // Normalize currency tokens (e.g. convert "INR" to the rupee symbol) so UI displays ₹ consistently.
+        assistantMessage = NormalizeCurrencySymbols(assistantMessage);
+        responseJson = NormalizeCurrencySymbols(responseJson);
 
         _context.ChatMessages.Add(new ChatMessage
         {
@@ -368,14 +373,47 @@ public sealed class BankingAiOrchestrator : IBankingAiOrchestrator
                     "Return current month spending by category for the customer.",
                     JsonNode.Parse("""
                     {
-                      "type": "object",
-                      "properties": {
-                        "year": { "type": "integer" },
-                        "month": { "type": "integer", "minimum": 1, "maximum": 12 }
-                      },
-                      "additionalProperties": false
+                        "type": "object",
+                        "properties": {
+                            "year": { "type": "integer" },
+                            "month": { "type": "integer", "minimum": 1, "maximum": 12 }
+                        },
+                        "additionalProperties": false
                     }
                     """)!)),
+            new OpenAiToolDefinition(
+                "function",
+                new OpenAiFunctionDefinition(
+                        "get_transactions_for_date",
+                        "Fetch transactions for a specific calendar date or explicit date range.",
+                        JsonNode.Parse("""
+                        {
+                            "type": "object",
+                            "properties": {
+                                "type": {
+                                    "type": "string",
+                                    "enum": ["credit", "debit", "all"],
+                                    "description": "Filter transactions by type."
+                                },
+                                "date": {
+                                    "type": "string",
+                                    "format": "date",
+                                    "description": "A single calendar date (YYYY-MM-DD) to query (inclusive)."
+                                },
+                                "from": {
+                                    "type": "string",
+                                    "format": "date",
+                                    "description": "Inclusive start date (YYYY-MM-DD)."
+                                },
+                                "to": {
+                                    "type": "string",
+                                    "format": "date",
+                                    "description": "Inclusive end date (YYYY-MM-DD)."
+                                }
+                            },
+                            "additionalProperties": false
+                        }
+                        """)!)),
             new OpenAiToolDefinition(
                 "function",
                 new OpenAiFunctionDefinition(
@@ -452,6 +490,13 @@ public sealed class BankingAiOrchestrator : IBankingAiOrchestrator
         Keep responses concise, factual, and easy to understand.
         Format currency values in INR.
         """;
+    }
+
+    private static string NormalizeCurrencySymbols(string? input)
+    {
+        if (string.IsNullOrEmpty(input)) return input ?? string.Empty;
+        // Replace standalone INR tokens with the rupee symbol. Preserve spacing/punctuation.
+        return Regex.Replace(input, "\\bINR\\b", "₹");
     }
 
     private static string BuildLocalResponse(BankingSnapshotDto snapshot)
