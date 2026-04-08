@@ -1081,9 +1081,29 @@ th {
   padding-left: 4px;
 }
 
+.assistant-response li + li {
+  margin-top: 10px;
+}
+
 .assistant-response li::marker {
   color: var(--accent);
   font-weight: 700;
+}
+
+.formatted-list-title {
+  font-weight: 600;
+}
+
+.formatted-list-details {
+  margin-top: 6px;
+}
+
+.formatted-list-details p {
+  margin: 0;
+}
+
+.formatted-list-details p + p {
+  margin-top: 6px;
 }
 
 .chat-bubble.user .assistant-response,

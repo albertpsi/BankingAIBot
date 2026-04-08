@@ -69,17 +69,43 @@ function formatConversationMessage(message: ChatMessage) {
 function renderFormattedText(text: string) {
   const lines = text.split(/\r?\n/);
   const blocks: ReactNode[] = [];
-  let listItems: string[] = [];
+  let listItems: Array<{ title: string; details: string[]; key: number }> = [];
 
   const flushList = (key: number) => {
     if (!listItems.length) return;
     blocks.push(
       <ol key={`ol-${key}`} className="formatted-list">
         {listItems.map((item, index) => (
-          <li
-            key={`${key}-${index}`}
-            dangerouslySetInnerHTML={{ __html: formatInline(item) }}
-          />
+          <li key={`${key}-${index}`}>
+            <div
+              className="formatted-list-title"
+              dangerouslySetInnerHTML={{ __html: formatInline(item.title) }}
+            />
+            {item.details.length > 0 && (
+              <div className="formatted-list-details">
+                {item.details.map((detail, detailIndex) => {
+                  const trimmedDetail = detail.trim();
+                  if (!trimmedDetail) {
+                    return (
+                      <div
+                        key={`${item.key}-gap-${detailIndex}`}
+                        className="formatted-gap"
+                      />
+                    );
+                  }
+
+                  return (
+                    <p
+                      key={`${item.key}-detail-${detailIndex}`}
+                      dangerouslySetInnerHTML={{
+                        __html: formatInline(trimmedDetail),
+                      }}
+                    />
+                  );
+                })}
+              </div>
+            )}
+          </li>
         ))}
       </ol>,
     );
@@ -90,7 +116,17 @@ function renderFormattedText(text: string) {
     const trimmed = line.trim();
     const listMatch = trimmed.match(/^\d+\.\s+(.*)$/);
     if (listMatch) {
-      listItems.push(listMatch[1]);
+      listItems.push({ title: listMatch[1], details: [], key: index });
+      return;
+    }
+
+    const isListDetail =
+      trimmed.length === 0 ||
+      trimmed.startsWith("-") ||
+      trimmed.startsWith("•");
+
+    if (listItems.length && isListDetail) {
+      listItems[listItems.length - 1].details.push(line);
       return;
     }
 
@@ -173,6 +209,14 @@ export default function BankingApp() {
       .map(formatConversationMessage)
       .filter((m): m is ChatRow => m !== null);
   }, [sessionDetail]);
+
+  const displayedChatMessages = useMemo(() => {
+    if (!sessionDetail) {
+      return chatMessages;
+    }
+
+    return [...currentSessionMessages, ...chatMessages];
+  }, [sessionDetail, currentSessionMessages, chatMessages]);
 
   const debitTransactions = useMemo(
     () =>
@@ -307,6 +351,7 @@ export default function BankingApp() {
         const result = await getSession(authToken, sessionId);
         if (!isMounted) return;
         setSessionDetail(result);
+        setChatMessages([]);
       } catch {
         if (!isMounted) return;
         setSessionDetail(null);
@@ -1050,14 +1095,12 @@ export default function BankingApp() {
                       </span>
                     </div>
 
-                    <div className="chat-feed" ref={chatFeedRef}>
-                      {(() => {
-                        const messages = sessionDetail
-                          ? currentSessionMessages
-                          : chatMessages;
-                        if (messages.length === 0 && !chatBusy) {
-                          return (
-                            <div className="chat-empty">
+              <div className="chat-feed" ref={chatFeedRef}>
+                {(() => {
+                  const messages = displayedChatMessages;
+                  if (messages.length === 0 && !chatBusy) {
+                    return (
+                      <div className="chat-empty">
                               <div className="chat-empty-icon">💬</div>
                               <h3>Start a conversation</h3>
                               <p>
