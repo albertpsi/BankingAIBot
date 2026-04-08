@@ -10,6 +10,7 @@ public interface IBankingToolDataService
     Task<TransactionsToolResultDto> GetTransactionsAsync(int userId, string type, int lookbackDays, CancellationToken cancellationToken = default);
     Task<TransactionsAndAccountInfoToolResultDto> GetTransactionsAndAccountInfoAsync(int userId, string type, int lookbackDays, CancellationToken cancellationToken = default);
     Task<TransactionsToolResultDto> GetTransactionsForDateAsync(int userId, string type, DateTime? dateUtc, DateTime? fromUtc, DateTime? toUtc, CancellationToken cancellationToken = default);
+    Task<TransactionsAndAccountInfoToolResultDto> GetTransactionsAndAccountInfoForDateAsync(int userId, string type, DateTime? dateUtc, DateTime? fromUtc, DateTime? toUtc, CancellationToken cancellationToken = default);
 }
 
 public sealed class BankingToolDataService : IBankingToolDataService
@@ -55,6 +56,8 @@ public sealed class BankingToolDataService : IBankingToolDataService
         return new TransactionsToolResultDto(
             normalizedType,
             normalizedDays,
+            transactions.Where(t => t.Amount > 0).Sum(t => t.Amount),
+            transactions.Where(t => t.Amount < 0).Sum(t => Math.Abs(t.Amount)),
             transactions.Count,
             transactions);
         }
@@ -82,6 +85,8 @@ public sealed class BankingToolDataService : IBankingToolDataService
             transactionInfo.Days,
             accountInfo.TotalBalance,
             accountInfo.TotalAvailableBalance,
+            transactionInfo.TotalCreditAmount,
+            transactionInfo.TotalDebitAmount,
             transactionInfo.TransactionCount,
             accountInfo.Accounts,
             transactionInfo.Transactions);
@@ -129,12 +134,44 @@ public sealed class BankingToolDataService : IBankingToolDataService
         return new TransactionsToolResultDto(
             normalizedType,
             days,
+            transactions.Where(t => t.Amount > 0).Sum(t => t.Amount),
+            transactions.Where(t => t.Amount < 0).Sum(t => Math.Abs(t.Amount)),
             transactions.Count,
             transactions);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.LogError(ex, "Failed to load tool transactions by date for user {UserId}.", userId);
+            throw;
+        }
+    }
+
+    public async Task<TransactionsAndAccountInfoToolResultDto> GetTransactionsAndAccountInfoForDateAsync(int userId, string type, DateTime? dateUtc, DateTime? fromUtc, DateTime? toUtc, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var accountTask = GetAccountInfoAsync(userId, cancellationToken);
+            var transactionTask = GetTransactionsForDateAsync(userId, type, dateUtc, fromUtc, toUtc, cancellationToken);
+
+            await Task.WhenAll(accountTask, transactionTask);
+
+            var accountInfo = await accountTask;
+            var transactionInfo = await transactionTask;
+
+            return new TransactionsAndAccountInfoToolResultDto(
+                transactionInfo.AppliedType,
+                transactionInfo.Days,
+                accountInfo.TotalBalance,
+                accountInfo.TotalAvailableBalance,
+                transactionInfo.TotalCreditAmount,
+                transactionInfo.TotalDebitAmount,
+                transactionInfo.TransactionCount,
+                accountInfo.Accounts,
+                transactionInfo.Transactions);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogError(ex, "Failed to load combined date-range tool data for user {UserId}.", userId);
             throw;
         }
     }

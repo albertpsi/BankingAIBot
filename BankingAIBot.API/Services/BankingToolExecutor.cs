@@ -58,6 +58,15 @@ public sealed class BankingToolExecutor : IBankingToolExecutor
                     ParseDateOrDefault(args.TryGetValue("to", out var t) ? t : default, null),
                     cancellationToken),
                 JsonOptions),
+            "get_transactions_and_account_info_for_date" => JsonSerializer.Serialize(
+                await _toolDataService.GetTransactionsAndAccountInfoForDateAsync(
+                    userId,
+                    GetString(args, "type", "all"),
+                    ParseDateOrDefault(args.TryGetValue("date", out var dd) ? dd : default, null),
+                    ParseDateOrDefault(args.TryGetValue("from", out var ff) ? ff : default, null),
+                    ParseDateOrDefault(args.TryGetValue("to", out var tt) ? tt : default, null),
+                    cancellationToken),
+                JsonOptions),
             "get_transactions_and_account_info" => JsonSerializer.Serialize(
                 await _toolDataService.GetTransactionsAndAccountInfoAsync(
                     userId,

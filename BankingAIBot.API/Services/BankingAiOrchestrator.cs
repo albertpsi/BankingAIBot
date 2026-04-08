@@ -406,6 +406,39 @@ public sealed class BankingAiOrchestrator : IBankingAiOrchestrator
             new OpenAiToolDefinition(
                 "function",
                 new OpenAiFunctionDefinition(
+                    "get_transactions_and_account_info_for_date",
+                    "Fetch account balances and transactions together for a specific calendar date or explicit date range.",
+                    JsonNode.Parse("""
+                    {
+                        "type": "object",
+                        "properties": {
+                            "type": {
+                                "type": "string",
+                                "enum": ["credit", "debit", "all"],
+                                "description": "Filter transactions by type."
+                            },
+                            "date": {
+                                "type": "string",
+                                "format": "date",
+                                "description": "A single calendar date (YYYY-MM-DD) to query (inclusive)."
+                            },
+                            "from": {
+                                "type": "string",
+                                "format": "date",
+                                "description": "Inclusive start date (YYYY-MM-DD)."
+                            },
+                            "to": {
+                                "type": "string",
+                                "format": "date",
+                                "description": "Inclusive end date (YYYY-MM-DD)."
+                            }
+                        },
+                        "additionalProperties": false
+                    }
+                    """)!)),
+            new OpenAiToolDefinition(
+                "function",
+                new OpenAiFunctionDefinition(
                     "get_spending_summary",
                     "Return current month spending by category for the customer.",
                     JsonNode.Parse("""
@@ -502,6 +535,8 @@ public sealed class BankingAiOrchestrator : IBankingAiOrchestrator
         - get_account_info for balance and account-detail questions
         - get_transactions for transaction-history questions
         - get_transactions_and_account_info for combined questions that need both balances and transactions
+        - get_transactions_for_date for transaction questions about a specific day or date range
+        - get_transactions_and_account_info_for_date for questions that ask for both balances and transactions for a specific day or date range
 
         Do not invent balances, account details, or transactions.
         When the user asks about their banking data, call the appropriate tool first.
@@ -518,11 +553,20 @@ public sealed class BankingAiOrchestrator : IBankingAiOrchestrator
         - balance-only questions -> get_account_info
         - transaction-only questions -> get_transactions
         - balance plus transaction questions -> get_transactions_and_account_info
+        - if the user asks "between", "from ... to ...", "on", or gives explicit dates, use the date-based tool variant
+        - if the user asks for both current balance and transactions/spend for explicit dates, use get_transactions_and_account_info_for_date
+        - if the user asks only for transactions/spend for explicit dates, use get_transactions_for_date
+
+        Date-range result rules:
+        - for date-based tools, use the backend totals returned by the tool for total credit and total debit
+        - do not recalculate totals from the individual transactions unless the tool did not return totals
 
         Type mapping rules:
         - credit-only questions -> type="credit"
         - debit-only questions -> type="debit"
         - mixed transaction questions -> type="all"
+
+        Always provide breakdown when the user asks for transactions between dates, and treat the range as inclusive.
 
         Keep responses concise, factual, and easy to understand.
         Format currency values in INR.

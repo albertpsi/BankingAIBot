@@ -35,6 +35,8 @@ public record AccountInfoToolResultDto(
 public record TransactionsToolResultDto(
     string AppliedType,
     int Days,
+    decimal TotalCreditAmount,
+    decimal TotalDebitAmount,
     int TransactionCount,
     IReadOnlyList<TransactionDto> Transactions);
 
@@ -43,6 +45,8 @@ public record TransactionsAndAccountInfoToolResultDto(
     int Days,
     decimal TotalBalance,
     decimal TotalAvailableBalance,
+    decimal TotalCreditAmount,
+    decimal TotalDebitAmount,
     int TransactionCount,
     IReadOnlyList<AccountDto> Accounts,
     IReadOnlyList<TransactionDto> Transactions);
